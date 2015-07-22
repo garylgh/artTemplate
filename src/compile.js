@@ -46,12 +46,23 @@ var compile = template.compile = function (source, options) {
     
     // 对编译结果进行一次包装
 
-    function render (data) {
+    function render (data, auWithoutBtns) {
         
         try {
-            
-            return new Render(data, filename) + '';
-            
+            //此处使用new关键字来调用函数是为了使该函数内部的this能够使用其prototype里定义的函数，
+            //通过Render(data, filename)的方式调用的话，this是window，没有相应的utils函数
+            //通过Render.call(utils, data, filename)也可以，因为函数里的this将使utils
+            var tempRenderStr = new Render(data, filename) + '';
+
+            //替换auWithoutBtns
+            //for gab项目，做按钮权限控制
+            if (auWithoutBtns && isArray(auWithoutBtns)) {
+                for (var i = auWithoutBtns.length - 1; i >= 0; i--) {
+                    var btnName = auWithoutBtns[i];
+                    tempRenderStr = tempRenderStr.replace(new RegExp(btnName + ' ', 'g'), 'hide ');
+                };
+            }
+            return tempRenderStr;
         } catch (e) {
             
             // 运行时出错后自动开启调试模式重新编译
@@ -152,7 +163,8 @@ function compiler (source, options) {
     var line = 1;
     var uniq = {$data:1,$filename:1,$utils:1,$helpers:1,$out:1,$line:1};
     
-
+    //ghlin 添加，用于存放嵌套对象
+    var embbedObjMap = {};
 
     var isNewEngine = ''.trim;// '__proto__' in {}
     var replaces = isNewEngine
@@ -238,7 +250,28 @@ function compiler (source, options) {
         throw e;
     }
 
+    //ghlin添加
+    function parseEmbbedObject(code) {
+        var result = "";
+        var reg = /\.(\w)/g;
+        var parentCode, trasferParent;
+        var i = code.lastIndexOf('.');
+        var matchDot = code.match(/\./g);
+        if (matchDot && matchDot.length > 1) {
+            if (i != -1) {
+                parentCode = code.substr(0, i);
 
+                trasferParent = parentCode.replace(reg, function(m) {
+                    return m.replace(".", "").toUpperCase();
+                });
+                result = trasferParent + code.substr(i);
+
+                embbedObjMap[trasferParent] = parentCode;
+            }
+        }
+
+        return result ? result : code;
+    }
 
     
     // 处理 HTML 语句
@@ -290,6 +323,13 @@ function compiler (source, options) {
             var escapeSyntax = escape && !/^=[=#]/.test(code);
 
             code = code.replace(/^=[=#]?|[\s;]*$/g, '');
+
+            /**
+             * add by ghlin
+             * 为了解决对象嵌套时，若嵌套对象为空，导致模板保存
+             * 例如 entity.personel.id, 若personel为空时报错，解决办法是： 把entity.personel转化为对象entityPersonel
+             */
+            code = parseEmbbedObject(code);
 
             // 对内容编码
             if (escapeSyntax) {
@@ -346,11 +386,17 @@ function compiler (source, options) {
                 value = "$helpers." + name;
 
             } else {
-
-                value = "$data." + name;
+                if (embbedObjMap[name]) {
+                    value = "$data." + embbedObjMap[name];
+                } else {
+                    value = "$data." + name;
+                }
             }
             
-            headerCode += name + "=" + value + ",";
+            // headerCode += name + "=" + value + ",";
+            // ghlin add 为了防止对象嵌套时，对象不存在导致模板render异常
+            // headerCode += name + "=(" + value + "!==undefined||" + value + "!==null" + ") ? " + value + " : {},";
+            headerCode += name + "=(" + value + " === 0 ? 0 : (" + value + " ? " + value + " : {})), ";
             uniq[name] = true;
             
             
